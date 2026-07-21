@@ -1,0 +1,258 @@
+{
+  "id": "",
+  "name": "05b - Digest Email",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        0
+      ]
+    },
+    {
+      "id": "trigger-webhook",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        416
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-digest-run",
+        "responseMode": "lastNode"
+      },
+      "webhookId": ""
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) FILTER (WHERE date_seen >= CURRENT_DATE - INTERVAL '8 days') AS total_seen, COUNT(*) FILTER (WHERE date_seen >= CURRENT_DATE - INTERVAL '8 days' AND LENGTH(TRIM(description)) >= 200) AS with_body, COUNT(*) FILTER (WHERE date_seen >= CURRENT_DATE - INTERVAL '8 days' AND quarantine_reason IS NOT NULL) AS quarantined, COUNT(*) FILTER (WHERE date_seen >= CURRENT_DATE - INTERVAL '8 days' AND scored_at IS NOT NULL) AS scored FROM listings;",
+        "options": {}
+      },
+      "id": "pg-stats-coverage",
+      "name": "Postgres: Get Coverage Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        -752,
+        208
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, source, url, title, company, priority_bonus, score, rationale FROM listings WHERE score >= 6 AND digested_at IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days' ORDER BY priority_bonus DESC, score DESC;",
+        "options": {}
+      },
+      "id": "pg-select-digest",
+      "name": "Postgres: Select Digest Candidates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        -608,
+        208
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Patch 3a: filter Postgres v2 zero-row phantom ({success:true}) out of the digest.\n// Real listings always have a numeric id; phantoms never do.\nconst rows = $input.all().map(i => i.json).filter(r => r && r.id);\n\n// Patch 4: pull coverage stats from upstream node for the email health banner.\n// Window matches the digest SELECT (date_seen >= today - 8 days). Ints are returned\n// as strings by node-postgres for COUNT/bigint, so coerce defensively.\nconst statsRaw = $('Postgres: Get Coverage Stats').first().json || {};\nconst stats = {\n  total_seen: Number(statsRaw.total_seen || 0),\n  with_body: Number(statsRaw.with_body || 0),\n  quarantined: Number(statsRaw.quarantined || 0),\n  scored: Number(statsRaw.scored || 0)\n};\n\nconst escapeHtml = (s) => String(s || '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#39;');\n\nconst seen = new Map();\nfor (const r of rows) {\n  const key = `${(r.title || '').toLowerCase().trim()}|${(r.company || '').toLowerCase().trim()}`;\n  const existing = seen.get(key);\n  if (!existing) {\n    seen.set(key, r);\n  } else if (existing.source === 'linkedin' && r.source !== 'linkedin') {\n    seen.set(key, r);\n  }\n}\nconst deduped = Array.from(seen.values());\n\ndeduped.sort((a, b) => {\n  if (a.priority_bonus !== b.priority_bonus) {\n    return a.priority_bonus ? -1 : 1;\n  }\n  return (b.score || 0) - (a.score || 0);\n});\n\nconst today = new Date().toLocaleDateString('en-GB', {\n  timeZone: 'Europe/Berlin',\n  year: 'numeric', month: 'long', day: 'numeric'\n});\n\nconst subject = `Job Radar: ${deduped.length} new ${deduped.length === 1 ? 'match' : 'matches'} (${today})`;\n\nconst cardHtml = (r) => {\n  const priorityBadge = r.priority_bonus\n    ? `<span style=\"background:#e11d48;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;margin-right:6px;\">PRIORITY</span>`\n    : '';\n  const scoreBadge = `<span style=\"background:#0a66c2;color:#fff;padding:3px 10px;border-radius:4px;font-weight:bold;font-size:14px;\">${r.score}/10</span>`;\n  const sourceTag = `<span style=\"color:#666;font-size:11px;margin-left:8px;text-transform:uppercase;\">${escapeHtml(r.source)}</span>`;\n  return `\n    <div style=\"border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:12px;font-family:Arial,sans-serif;\">\n      <div style=\"margin-bottom:6px;\">${priorityBadge}${scoreBadge}${sourceTag}</div>\n      <div style=\"font-size:16px;font-weight:bold;margin-bottom:4px;\">\n        <a href=\"${escapeHtml(r.url)}\" style=\"color:#0a66c2;text-decoration:none;\">${escapeHtml(r.title || 'Untitled role')}</a>\n      </div>\n      <div style=\"font-size:13px;color:#333;margin-bottom:8px;\">${escapeHtml(r.company || 'Unknown')}</div>\n      <div style=\"font-size:13px;color:#555;line-height:1.4;\">${escapeHtml(r.rationale || '')}</div>\n    </div>`;\n};\n\n// Coverage banner: surfaces the body-coverage health of this scoring window.\n// Rendered only when the digest sends (count > 0); zero-match runs skip the email.\nconst bodyPct = stats.total_seen > 0\n  ? Math.round((stats.with_body / stats.total_seen) * 100)\n  : 0;\nconst coverageBanner = `\n    <div style=\"background:#f0f6ff;border-left:3px solid #0a66c2;padding:10px 12px;margin-bottom:16px;font-size:12px;color:#444;line-height:1.5;\">\n      <strong style=\"color:#0a66c2;\">Coverage</strong> &middot;\n      ${stats.total_seen} seen this week &middot;\n      ${stats.with_body} with body (${bodyPct}%) &middot;\n      ${stats.scored} scored &middot;\n      ${stats.quarantined} quarantined (no body)\n    </div>`;\n\nconst html = `<!DOCTYPE html><html><body style=\"margin:0;padding:16px;background:#f6f6f6;font-family:Arial,sans-serif;\">\n  <div style=\"max-width:640px;margin:0 auto;\">\n    <h2 style=\"margin:0 0 16px 0;font-size:18px;\">Job Radar &mdash; ${today}</h2>\n    <p style=\"margin:0 0 12px 0;font-size:13px;color:#666;\">\n      ${deduped.length} listing${deduped.length === 1 ? '' : 's'} scored 6 or higher.\n      ${deduped.some(r => r.priority_bonus) ? 'Priority listings pinned to top.' : ''}\n    </p>\n    ${coverageBanner}\n    ${deduped.map(cardHtml).join('')}\n    <p style=\"margin-top:24px;font-size:11px;color:#999;\">Sent by 05b - Digest Email</p>\n  </div>\n</body></html>`;\n\nreturn [{ json: { subject, html, count: deduped.length, included_ids: deduped.map(r => r.id), stats } }];"
+      },
+      "id": "code-assemble-digest",
+      "name": "Code: Assemble Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-rows",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-matches",
+      "name": "IF: Has Matches",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "your-email@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "gmail-send",
+      "name": "Gmail: Send Digest",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        304,
+        160
+      ],
+      "webhookId": "",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "id": "pg-mark-digested",
+      "name": "Postgres: Mark Digested",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        608,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE listings SET digested_at = NOW() WHERE id = ANY(ARRAY[{{ ($('Code: Assemble Digest').first().json.included_ids || [0]).join(',') }}]::bigint[]);",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Get Coverage Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Get Coverage Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Get Coverage Stats": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Select Digest Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Select Digest Candidates": {
+      "main": [
+        [
+          {
+            "node": "Code: Assemble Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Assemble Digest": {
+      "main": [
+        [
+          {
+            "node": "IF: Has Matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Has Matches": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Send Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Send Digest": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Mark Digested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true
+  }
+}

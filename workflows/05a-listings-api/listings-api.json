@@ -1,0 +1,183 @@
+{
+  "id": "",
+  "name": "05a - Listings Data API",
+  "active": true,
+  "nodes": [
+    {
+      "id": "wh-get-unscored",
+      "name": "Webhook: GET listings/unscored",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "listings/unscored",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": ""
+    },
+    {
+      "id": "pg-select-unscored",
+      "name": "Postgres: Select Unscored",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        256,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, source, title, company, location, description, priority_bonus FROM listings WHERE scored_at IS NULL AND quarantine_reason IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days';",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "id": "filter-phantom",
+      "name": "Filter: Drop Phantom Rows",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        512,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-id",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond-unscored",
+      "name": "Respond: Send Unscored",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        0
+      ],
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      }
+    },
+    {
+      "id": "wh-post-score",
+      "name": "Webhook: POST listings/score",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        256
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "listings/score",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": ""
+    },
+    {
+      "id": "pg-update-score",
+      "name": "Postgres: UPDATE Score",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        256,
+        256
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE listings SET score = $1, rationale = $2, scored_at = NOW() WHERE id = $3 RETURNING id, score;",
+        "options": {
+          "queryReplacement": "={{ $json.body.score }},{{ $json.body.rationale }},{{ $json.body.id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: GET listings/unscored": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Select Unscored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Select Unscored": {
+      "main": [
+        [
+          {
+            "node": "Filter: Drop Phantom Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Drop Phantom Rows": {
+      "main": [
+        [
+          {
+            "node": "Respond: Send Unscored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: POST listings/score": {
+      "main": [
+        [
+          {
+            "node": "Postgres: UPDATE Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

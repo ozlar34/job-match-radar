@@ -1,0 +1,238 @@
+{
+  "updatedAt": "2026-04-24T21:53:39.661Z",
+  "createdAt": "2026-04-16T23:21:31.757Z",
+  "id": "",
+  "name": "Platform Scrapers - Main",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "apify-run-linkedin",
+      "name": "Apify: Run Actor - LinkedIn",
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -80
+      ],
+      "parameters": {
+        "resource": "Actors",
+        "operation": "Run actor",
+        "actorId": "cryptosignals~linkedin-jobs-scraper",
+        "customBody": "={\n  \"action\": \"search\",\n  \"keywords\": \"\\\"community manager\\\" OR \\\"community lead\\\" OR \\\"head of community\\\" OR \\\"social media manager\\\" OR \\\"community operations\\\" OR \\\"AI project manager\\\" OR \\\"AI program manager\\\" OR \\\"head of social\\\" OR \\\"creator community\\\" OR \\\"product community\\\" OR \\\"community strategy\\\" OR \\\"community operations lead\\\"\",\n  \"location\": \"Germany\",\n  \"maxItems\": 100\n}",
+        "waitForFinish": true
+      },
+      "credentials": {
+        "apifyApi": {
+          "id": "",
+          "name": "Apify account"
+        }
+      }
+    },
+    {
+      "id": "apify-dataset-linkedin",
+      "name": "Apify: Get Dataset Items - LinkedIn",
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -80
+      ],
+      "parameters": {
+        "resource": "Datasets",
+        "operation": "Get items",
+        "datasetId": "={{ $json.defaultDatasetId }}"
+      },
+      "credentials": {
+        "apifyApi": {
+          "id": "",
+          "name": "Apify account"
+        }
+      }
+    },
+    {
+      "id": "code-normalize-linkedin",
+      "name": "Code: Normalize LinkedIn",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const priorityPattern = /\\b(your-priority-keyword)\\b/i;\nconst excludeTitlePattern = /marketing manager|brand manager|performance marketing|growth marketing|sales manager|key account|business development|pr manager|communications manager/i;\n\nconst normalized = items.map(item => {\n  const title = item.json.title || item.json.positionName || item.json.name || null;\n  const description = item.json.description || item.json.descriptionText || null;\n  const haystack = `${title || ''} ${description || ''}`;\n  return {\n    json: {\n      title,\n      company: item.json.company || item.json.employerName || item.json.companyName || null,\n      url: item.json.jobUrl || item.json.url || item.json.applyUrl || null,\n      source: 'linkedin',\n      location: item.json.location || item.json.city || '',\n      dateRetrieved: new Date().toISOString(),\n      salary: item.json.salary || item.json.salaryMin || null,\n      description,\n      externalId: item.json.id || item.json.jobId || null,\n      priorityBonus: priorityPattern.test(haystack)\n    }\n  };\n});\n\nreturn normalized.filter(({ json }) => {\n  if (excludeTitlePattern.test(json.title || '')) return false;\n  if (json.priorityBonus) return true;\n  return true;\n});"
+      }
+    },
+    {
+      "id": "code-rename-for-supabase",
+      "name": "Code: Rename for Supabase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return items.filter(item => item.json.url).map(item => ({ json: { source: item.json.source, external_id: item.json.externalId, url: item.json.url, title: item.json.title, company: item.json.company, location: item.json.location, salary: item.json.salary, description: item.json.description, priority_bonus: item.json.priorityBonus, date_seen: new Date().toISOString().slice(0, 10) } }));"
+      }
+    },
+    {
+      "id": "postgres-insert-listings",
+      "name": "Postgres: Insert listings",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -80
+      ],
+      "parameters": {
+        "resource": "database",
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": "listings"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source": "={{ $json.source }}",
+            "external_id": "={{ $json.external_id }}",
+            "url": "={{ $json.url }}",
+            "title": "={{ $json.title }}",
+            "company": "={{ $json.company }}",
+            "location": "={{ $json.location }}",
+            "salary": "={{ $json.salary }}",
+            "description": "={{ $json.description }}",
+            "priority_bonus": "={{ $json.priority_bonus }}",
+            "date_seen": "={{ $json.date_seen }}"
+          }
+        },
+        "options": {
+          "skipOnConflict": true,
+          "queryBatching": "single"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "id": "trigger-webhook",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        480
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-scrapers-run",
+        "responseMode": "lastNode"
+      },
+      "webhookId": ""
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Apify: Run Actor - LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify: Run Actor - LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Apify: Get Dataset Items - LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify: Get Dataset Items - LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Code: Rename for Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Rename for Supabase": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Insert listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Apify: Run Actor - LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

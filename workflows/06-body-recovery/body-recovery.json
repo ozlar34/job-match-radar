@@ -1,0 +1,317 @@
+{
+  "id": "",
+  "name": "06 - Body Recovery (LinkedIn JSON-LD)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "set-config",
+      "name": "Set: Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-dry-run",
+              "name": "dry_run",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "cfg-batch-size",
+              "name": "batch_size",
+              "value": 5,
+              "type": "number"
+            },
+            {
+              "id": "cfg-min-body",
+              "name": "min_body_length",
+              "value": 200,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pg-select-quarantined",
+      "name": "Postgres: Select Quarantined LinkedIn",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        80,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, url, title, company FROM listings WHERE source = 'linkedin' AND quarantine_reason IS NOT NULL AND url LIKE '%linkedin.com/jobs/%' ORDER BY date_seen DESC LIMIT {{ $('Set: Config').first().json.batch_size }};",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "id": "http-fetch-jd",
+      "name": "HTTP Request: Fetch JD HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        320,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.7,de;q=0.3"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          },
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 5
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-extract-jsonld",
+      "name": "Code: Extract JSON-LD Description",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Extract description from a LinkedIn job page's JobPosting JSON-LD block.\n// LinkedIn ships structured data on most public job pages even unauth — this is\n// the cheapest recovery path. Fallback path (Apify detail actor) is out of scope\n// for this draft.\n\nconst minBody = $('Set: Config').first().json.min_body_length || 200;\n\nconst decodeEntities = (s) => String(s || '')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .replace(/&#39;/g, \"'\")\n  .replace(/&nbsp;/g, ' ');\n\nconst stripTags = (s) => String(s || '')\n  .replace(/<br\\s*\\/?>/gi, '\\n')\n  .replace(/<\\/p>/gi, '\\n\\n')\n  .replace(/<\\/li>/gi, '\\n')\n  .replace(/<[^>]+>/g, '')\n  .replace(/\\n{3,}/g, '\\n\\n')\n  .trim();\n\nconst extractJobPosting = (html) => {\n  if (!html || typeof html !== 'string') return null;\n  const re = /<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi;\n  let m;\n  const blocks = [];\n  while ((m = re.exec(html)) !== null) {\n    try {\n      const parsed = JSON.parse(m[1].trim());\n      blocks.push(parsed);\n    } catch (e) {\n      // skip malformed blocks\n    }\n  }\n  const flat = blocks.flatMap(b => Array.isArray(b) ? b : [b]);\n  return flat.find(b => b && (b['@type'] === 'JobPosting' || (Array.isArray(b['@type']) && b['@type'].includes('JobPosting'))));\n};\n\nconst items = $input.all();\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  const orig = $('Postgres: Select Quarantined LinkedIn').itemMatching(i)?.json || {};\n  const httpItem = items[i].json;\n  const html = typeof httpItem === 'string' ? httpItem : (httpItem.data || httpItem.body || '');\n  const statusCode = items[i].json?.statusCode ?? null;\n\n  const base = {\n    id: orig.id,\n    url: orig.url,\n    title: orig.title,\n    company: orig.company,\n    http_status: statusCode\n  };\n\n  const jp = extractJobPosting(html);\n  if (!jp || !jp.description) {\n    out.push({ json: { ...base, recovered: false, reason: 'no_jobposting_jsonld', body_length: 0 } });\n    continue;\n  }\n\n  const desc = stripTags(decodeEntities(jp.description));\n  if (desc.length < minBody) {\n    out.push({ json: { ...base, recovered: false, reason: `too_short_${desc.length}`, body_length: desc.length } });\n    continue;\n  }\n\n  out.push({ json: { ...base, recovered: true, description: desc, body_length: desc.length, body_preview: desc.slice(0, 240) } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "if-dry-run",
+      "name": "IF: Dry Run",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "is-dry-run",
+              "leftValue": "={{ $('Set: Config').first().json.dry_run }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-format-preview",
+      "name": "Code: Format Preview",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        -120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Dry-run summary. No DB writes. Inspect output in n8n UI before flipping\n// dry_run=false in Set: Config.\nconst rows = $input.all().map(i => i.json);\nconst recovered = rows.filter(r => r.recovered);\nconst failed = rows.filter(r => !r.recovered);\nreturn [{\n  json: {\n    mode: 'dry_run',\n    total: rows.length,\n    recovered_count: recovered.length,\n    failed_count: failed.length,\n    recovery_rate: rows.length ? Math.round((recovered.length / rows.length) * 100) + '%' : '0%',\n    recovered_samples: recovered.map(r => ({ id: r.id, title: r.title, company: r.company, body_length: r.body_length, body_preview: r.body_preview })),\n    failures: failed.map(r => ({ id: r.id, title: r.title, http_status: r.http_status, reason: r.reason }))\n  }\n}];"
+      }
+    },
+    {
+      "id": "code-filter-recovered",
+      "name": "Code: Filter Recovered",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Live mode: only forward rows that actually recovered a body. Failures stay\n// quarantined as-is.\nreturn $input.all().filter(i => i.json && i.json.recovered === true);"
+      }
+    },
+    {
+      "id": "pg-update-recovered",
+      "name": "Postgres: Update Recovered",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        120
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE listings SET description = $1, quarantine_reason = NULL, quarantined_at = NULL WHERE id = $2 RETURNING id, LENGTH(description) AS body_length;",
+        "options": {
+          "queryReplacement": "={{ $json.description }},{{ $json.id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set: Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: Config": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Select Quarantined LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Select Quarantined LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Fetch JD HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Fetch JD HTML": {
+      "main": [
+        [
+          {
+            "node": "Code: Extract JSON-LD Description",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Extract JSON-LD Description": {
+      "main": [
+        [
+          {
+            "node": "IF: Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Dry Run": {
+      "main": [
+        [
+          {
+            "node": "Code: Format Preview",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Filter Recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Filter Recovered": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Update Recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true
+  }
+}

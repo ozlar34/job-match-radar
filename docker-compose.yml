@@ -1,0 +1,13 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    volumes:
+      - ~/.n8n:/home/node/.n8n
+    environment:
+      - N8N_SECURE_COOKIE=false
+      - N8N_COMMUNITY_PACKAGES_ENABLED=true
+      - N8N_INSIGHTS_ENABLED=false
+      - N8N_DIAGNOSTICS_ENABLED=false

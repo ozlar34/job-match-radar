@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-04-24T21:53:39.661Z",
+  "updatedAt": "2026-05-06T21:55:38.902Z",
   "createdAt": "2026-04-16T23:21:31.757Z",
   "id": "",
   "name": "Platform Scrapers - Main",
@@ -31,7 +31,7 @@
         "resource": "Actors",
         "operation": "Run actor",
         "actorId": "cryptosignals~linkedin-jobs-scraper",
-        "customBody": "={\n  \"action\": \"search\",\n  \"keywords\": \"\\\"community manager\\\" OR \\\"community lead\\\" OR \\\"head of community\\\" OR \\\"social media manager\\\" OR \\\"community operations\\\" OR \\\"AI project manager\\\" OR \\\"AI program manager\\\" OR \\\"head of social\\\" OR \\\"creator community\\\" OR \\\"product community\\\" OR \\\"community strategy\\\" OR \\\"community operations lead\\\"\",\n  \"location\": \"Germany\",\n  \"maxItems\": 100\n}",
+        "customBody": "={\n  \"action\": \"search\",\n  \"keywords\": \"\\\"community manager\\\" OR \\\"community lead\\\" OR \\\"head of community\\\" OR \\\"social media manager\\\" OR \\\"community operations\\\" OR \\\"AI project manager\\\" OR \\\"AI program manager\\\" OR \\\"head of social\\\" OR \\\"creator community\\\" OR \\\"product community\\\" OR \\\"community strategy\\\" OR \\\"community operations lead\\\" OR \\\"AI operations\\\" OR \\\"AI enablement\\\" OR \\\"AI transformation\\\" OR \\\"AI specialist\\\"\",\n  \"location\": \"Germany\",\n  \"maxItems\": 100\n}",
         "waitForFinish": true
       },
       "credentials": {
@@ -74,7 +74,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "const priorityPattern = /\\b(your-priority-keyword)\\b/i;\nconst excludeTitlePattern = /marketing manager|brand manager|performance marketing|growth marketing|sales manager|key account|business development|pr manager|communications manager/i;\n\nconst normalized = items.map(item => {\n  const title = item.json.title || item.json.positionName || item.json.name || null;\n  const description = item.json.description || item.json.descriptionText || null;\n  const haystack = `${title || ''} ${description || ''}`;\n  return {\n    json: {\n      title,\n      company: item.json.company || item.json.employerName || item.json.companyName || null,\n      url: item.json.jobUrl || item.json.url || item.json.applyUrl || null,\n      source: 'linkedin',\n      location: item.json.location || item.json.city || '',\n      dateRetrieved: new Date().toISOString(),\n      salary: item.json.salary || item.json.salaryMin || null,\n      description,\n      externalId: item.json.id || item.json.jobId || null,\n      priorityBonus: priorityPattern.test(haystack)\n    }\n  };\n});\n\nreturn normalized.filter(({ json }) => {\n  if (excludeTitlePattern.test(json.title || '')) return false;\n  if (json.priorityBonus) return true;\n  return true;\n});"
+        "jsCode": "const priorityPattern = /\\b(your-priority-keyword)\\b/i;\nconst excludeTitlePattern = /marketing manager|brand manager|performance marketing|growth marketing|sales manager|key account|business development|pr manager|communications manager/i;\nconst requiresHighGermanPattern = /deutsch\\s*(c1|c2|muttersprache|muttersprachlich|verhandlungssicher|fließend|fliessend)|german\\s*(c1|c2|native|fluent)|native\\s*german\\s*speaker|fluent\\s*in\\s*german|muttersprachlich\\s*deutsch/i;\n\nconst normalized = items.map(item => {\n  const title = item.json.title || item.json.positionName || item.json.name || null;\n  const description = item.json.description || item.json.descriptionText || null;\n  const haystack = `${title || ''} ${description || ''}`;\n  return {\n    json: {\n      title,\n      company: item.json.company || item.json.employerName || item.json.companyName || null,\n      url: item.json.jobUrl || item.json.url || item.json.applyUrl || null,\n      source: 'linkedin',\n      location: item.json.location || item.json.city || '',\n      dateRetrieved: new Date().toISOString(),\n      salary: item.json.salary || item.json.salaryMin || null,\n      description,\n      externalId: item.json.id || item.json.jobId || null,\n      priorityBonus: priorityPattern.test(haystack)\n    }\n  };\n});\n\nreturn normalized.filter(({ json }) => {\n  if (excludeTitlePattern.test(json.title || '')) return false;\n  if (json.priorityBonus) return true;\n  if (requiresHighGermanPattern.test(json.description || '')) return false;\n  return true;\n});"
       }
     },
     {

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-05-21T17:18:04.694Z",
+  "updatedAt": "2026-06-23T22:54:24.629Z",
   "createdAt": "2026-04-17T15:24:28.753Z",
   "id": "",
   "name": "ATS Pulls - Main",
-  "description": null,
+  "description": "Queries Obsidian vault for active watchlist companies (greenhouse/ashby only), fetches ATS job listings, normalises and upserts to Postgres.",
   "active": true,
   "isArchived": false,
   "nodes": [
@@ -19,35 +19,35 @@
       "parameters": {}
     },
     {
-      "id": "c68b78a6-b5e2-4e46-b816-735851805e5e",
-      "name": "Notion: Query Watchlist",
-      "type": "n8n-nodes-base.notion",
-      "typeVersion": 2.2,
+      "id": "715a653c-90cf-4755-950a-0b867ec436f1",
+      "name": "HTTP: Query Obsidian Watchlist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         224,
         96
       ],
       "parameters": {
-        "resource": "databasePage",
-        "operation": "getAll",
-        "databaseId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "YOUR_NOTION_WATCHLIST_DB_ID"
-        },
-        "returnAll": true,
-        "simple": true,
-        "filterType": "manual",
-        "matchType": "allFilters",
-        "filters": {
-          "conditions": [
-            {
-              "key": "Active Watchlist|checkbox",
-              "type": "checkbox",
-              "condition": "equals",
-              "checkboxValue": true
+        "method": "POST",
+        "url": "http://host.docker.internal:27123/search/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/vnd.olrapi.jsonlogic+json",
+        "body": "{\"and\":[{\"==\":[{\"var\":\"frontmatter.active_watchlist\"},true]},{\"!\":[{\"in\":[{\"var\":\"frontmatter.ats_type\"},[null,\"lever\"]]}]},{\"var\":\"frontmatter\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "autodetect"
             }
-          ]
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Obsidian Local Rest API"
         }
       }
     },
@@ -62,7 +62,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const items = $input.all();\nconst ATS_ENDPOINTS = {\n  greenhouse: 'https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true',\n  ashby:      'https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true',\n  lever:      'https://api.lever.co/v0/postings/{slug}?mode=json'\n};\n\nconst result = [];\nfor (const item of items) {\n  const props = item.json;\n  // n8n Notion node v2.2 with simple=true transforms property names to snake_case\n  // with a \"property_\" prefix. E.g. \"Active Watchlist\" -> \"property_active_watchlist\"\n  // \"ATS Type\" -> \"property_ats_type\", \"Board Slug\" -> \"property_board_slug\", \"Name\" -> \"property_name\"\n  const activeWatchlist = props['property_active_watchlist'];\n  const atsType = (props['property_ats_type'] || '').toLowerCase().trim();\n  const boardSlug = (props['property_board_slug'] || '').trim();\n  const company = props['property_name'] || '';\n\n  // Skip rows missing ATS Type or Board Slug (correct degradation)\n  if (!activeWatchlist) continue;\n  if (!atsType || !['greenhouse','ashby','lever'].includes(atsType)) continue;\n  if (!boardSlug) continue;\n\n  const urlTemplate = ATS_ENDPOINTS[atsType];\n  const url = urlTemplate.replace('{slug}', boardSlug);\n\n  result.push({ json: { company, ats_type: atsType, slug: boardSlug, url } });\n}\nreturn result;"
+        "jsCode": "const ATS_ENDPOINTS = {\n  greenhouse: 'https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true',\n  ashby:      'https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true'\n};\n\nconst rawItems = $input.all();\nlet notes = [];\n\n// Obsidian /search/ returns [{filename, result}] where result IS the frontmatter object\n// (because we used and-returns-last-truthy trick in the JSONLogic query)\nif (rawItems.length === 1 && Array.isArray(rawItems[0].json)) {\n  notes = rawItems[0].json;\n} else {\n  notes = rawItems.map(i => i.json);\n}\n\nconst result = [];\nfor (const note of notes) {\n  // result field contains the frontmatter when using and-returns-last-truthy JSONLogic\n  const fm = note.result || note.frontmatter || note;\n  const company = (fm.company || '').trim();\n  const atsType = (fm.ats_type || '').toLowerCase().trim();\n  const boardSlug = (fm.board_slug || '').trim();\n\n  // Only greenhouse and ashby are supported; lever is excluded at query time\n  if (!atsType || !['greenhouse', 'ashby'].includes(atsType)) continue;\n  if (!boardSlug) continue;\n\n  const urlTemplate = ATS_ENDPOINTS[atsType];\n  const url = urlTemplate.replace('{slug}', boardSlug);\n\n  result.push({ json: { company, ats_type: atsType, slug: boardSlug, url } });\n}\nreturn result;"
       }
     },
     {
@@ -75,18 +75,16 @@
         96
       ],
       "parameters": {
-        "method": "GET",
         "url": "={{ $json.url }}",
         "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5
+            }
+          },
           "response": {
             "response": {
               "responseFormat": "json"
-            }
-          },
-          "batching": {
-            "batch": {
-              "batchSize": 5,
-              "batchInterval": 1000
             }
           }
         }
@@ -104,7 +102,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const priorityPattern = /\\b(priority)\\b/i;\nconst excludeTitlePattern = /marketing manager|brand manager|performance marketing|growth marketing|sales manager|key account|business development|pr manager|communications manager/i;\nconst requiresHighGermanPattern = /deutsch\\s*(c1|c2|muttersprache|muttersprachlich|verhandlungssicher|fließend|fliessend)|german\\s*(c1|c2|native|fluent)|native\\s*german\\s*speaker|fluent\\s*in\\s*german|muttersprachlich\\s*deutsch/i;\nconst LOCATION_OK = /\\b(germany|deutschland|berlin|munich|münchen|hamburg|cologne|köln|frankfurt|düsseldorf|stuttgart|dublin|london|amsterdam|paris|madrid|barcelona|lisbon|stockholm|copenhagen|helsinki|vienna|zurich|warsaw|emea|europe|eu\\b|remote)\\b/i;\nconst AMERICAS_ONLY = /\\b(americas only|us only|u\\.s\\. only|us-only|us based|us-based|canada only|latam|apac only|north america only)\\b/i;\n\nconst today = new Date().toISOString().slice(0, 10);\nconst items = $input.all();\nconst buildItems = $('Code: Build ATS requests').all();\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const body = item.json;\n\n  // Correlate each HTTP response to its source watchlist row by index.\n  // The HTTP node preserves input order 1:1, so buildItems[i] is the paired source.\n  // (Was: $('Code: Build ATS requests').item — broken in runOnceForAllItems mode;\n  // resolved to a single static item and stamped every Greenhouse job with one company.)\n  const buildItem = buildItems[i] || null;\n  const ats_type = buildItem ? buildItem.json.ats_type : '';\n  const companyName = buildItem ? buildItem.json.company : '';\n\n  let jobs = [];\n\n  if (ats_type === 'greenhouse') {\n    const raw = body.jobs || [];\n    for (const j of raw) {\n      const title = j.title || null;\n      const location = j.location?.name || '';\n      const descRaw = typeof j.content === 'string' ? j.content : null;\n      const description = descRaw ? descRaw.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim() : null;\n      const haystack = `${title || ''} ${description || ''} ${location}`;\n      jobs.push({\n        source: 'greenhouse',\n        external_id: j.id ? String(j.id) : null,\n        url: j.absolute_url || null,\n        title,\n        company: companyName,\n        location,\n        salary: null,\n        description,\n        priority_bonus: priorityPattern.test(haystack),\n        date_seen: today\n      });\n    }\n  } else if (ats_type === 'ashby') {\n    const raw = body.jobs || [];\n    for (const j of raw) {\n      const title = j.title || null;\n      const primaryLoc = j.location || '';\n      const secondary = Array.isArray(j.secondaryLocations)\n        ? j.secondaryLocations.map(s => s.locationName || s.location || '').filter(Boolean).join('; ')\n        : '';\n      const location = [primaryLoc, secondary].filter(Boolean).join('; ');\n      const description = j.descriptionPlain || null;\n      const haystack = `${title || ''} ${description || ''} ${location}`;\n      jobs.push({\n        source: 'ashby',\n        external_id: j.id || null,\n        url: j.jobUrl || j.applyUrl || null,\n        title,\n        company: companyName,\n        location,\n        salary: j.compensation?.compensationTierSummary || null,\n        description,\n        priority_bonus: priorityPattern.test(haystack),\n        date_seen: today\n      });\n    }\n  } else if (ats_type === 'lever') {\n    // Lever: body IS the array (no wrapper)\n    const raw = Array.isArray(body) ? body : [];\n    for (const j of raw) {\n      const title = j.text || null;\n      const location = j.categories?.location || '';\n      const descRaw = j.descriptionPlain || (typeof j.description === 'string' ? j.description : null);\n      const description = descRaw && !j.descriptionPlain\n        ? descRaw.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim()\n        : descRaw;\n      const salary = j.salaryRange?.text || null;\n      const haystack = `${title || ''} ${description || ''} ${location}`;\n      jobs.push({\n        source: 'lever',\n        external_id: j.id || null,\n        url: j.hostedUrl || j.applyUrl || null,\n        title,\n        company: companyName,\n        location,\n        salary,\n        description,\n        priority_bonus: priorityPattern.test(haystack),\n        date_seen: today\n      });\n    }\n  }\n\n  // Apply filter\n  for (const job of jobs) {\n    if (!job.url) continue;\n    if (excludeTitlePattern.test(job.title || '')) continue;\n    if (job.priority_bonus) { results.push({ json: job }); continue; }\n    if (AMERICAS_ONLY.test(job.location || '')) continue;\n    if (requiresHighGermanPattern.test(job.description || '')) continue;\n    if (LOCATION_OK.test(job.location || '')) results.push({ json: job });\n  }\n}\n\nreturn results;"
+        "jsCode": "const priorityPattern = /\\b(priority)\\b/i;\nconst excludeTitlePattern = /marketing manager|brand manager|performance marketing|growth marketing|sales manager|key account|business development|pr manager|communications manager/i;\nconst requiresHighGermanPattern = /deutsch\\s*(c1|c2|muttersprache|muttersprachlich|verhandlungssicher|fließend|fliessend)|german\\s*(c1|c2|native|fluent)|native\\s*german\\s*speaker|fluent\\s*in\\s*german|muttersprachlich\\s*deutsch/i;\nconst LOCATION_OK = /\\b(germany|deutschland|berlin|munich|münchen|hamburg|cologne|köln|frankfurt|düsseldorf|stuttgart|dublin|london|amsterdam|paris|madrid|barcelona|lisbon|stockholm|copenhagen|helsinki|vienna|zurich|warsaw|emea|europe|eu\\b|remote)\\b/i;\nconst AMERICAS_ONLY = /\\b(americas only|us only|u\\.s\\. only|us-only|us based|us-based|canada only|latam|apac only|north america only)\\b/i;\n\nconst today = new Date().toISOString().slice(0, 10);\nconst items = $input.all();\nconst buildItems = $('Code: Build ATS requests').all();\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const body = item.json;\n\n  const buildItem = buildItems[i] || null;\n  const ats_type = buildItem ? buildItem.json.ats_type : '';\n  const companyName = buildItem ? buildItem.json.company : '';\n\n  let jobs = [];\n\n  if (ats_type === 'greenhouse') {\n    const raw = body.jobs || [];\n    for (const j of raw) {\n      const title = j.title || null;\n      const location = j.location?.name || '';\n      const descRaw = typeof j.content === 'string' ? j.content : null;\n      const description = descRaw ? descRaw.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim() : null;\n      const haystack = `${title || ''} ${description || ''} ${location}`;\n      jobs.push({\n        source: 'greenhouse',\n        external_id: j.id ? String(j.id) : null,\n        url: j.absolute_url || null,\n        title,\n        company: companyName,\n        location,\n        salary: null,\n        description,\n        priority_bonus: priorityPattern.test(haystack),\n        date_seen: today\n      });\n    }\n  } else if (ats_type === 'ashby') {\n    const raw = body.jobs || [];\n    for (const j of raw) {\n      const title = j.title || null;\n      const primaryLoc = j.location || '';\n      const secondary = Array.isArray(j.secondaryLocations)\n        ? j.secondaryLocations.map(s => s.locationName || s.location || '').filter(Boolean).join('; ')\n        : '';\n      const location = [primaryLoc, secondary].filter(Boolean).join('; ');\n      const description = j.descriptionPlain || null;\n      const haystack = `${title || ''} ${description || ''} ${location}`;\n      jobs.push({\n        source: 'ashby',\n        external_id: j.id || null,\n        url: j.jobUrl || j.applyUrl || null,\n        title,\n        company: companyName,\n        location,\n        salary: j.compensation?.compensationTierSummary || null,\n        description,\n        priority_bonus: priorityPattern.test(haystack),\n        date_seen: today\n      });\n    }\n  }\n\n  for (const job of jobs) {\n    if (!job.url) continue;\n    if (excludeTitlePattern.test(job.title || '')) continue;\n    if (job.priority_bonus) { results.push({ json: job }); continue; }\n    if (AMERICAS_ONLY.test(job.location || '')) continue;\n    if (requiresHighGermanPattern.test(job.description || '')) continue;\n    if (LOCATION_OK.test(job.location || '')) results.push({ json: job });\n  }\n}\n\nreturn results;"
       }
     },
     {
@@ -124,6 +122,12 @@
         },
         "resource": "database",
         "operation": "executeQuery"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
       }
     },
     {
@@ -149,14 +153,14 @@
       "main": [
         [
           {
-            "node": "Notion: Query Watchlist",
+            "node": "HTTP: Query Obsidian Watchlist",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Notion: Query Watchlist": {
+    "HTTP: Query Obsidian Watchlist": {
       "main": [
         [
           {
@@ -204,7 +208,7 @@
       "main": [
         [
           {
-            "node": "Notion: Query Watchlist",
+            "node": "HTTP: Query Obsidian Watchlist",
             "type": "main",
             "index": 0
           }
@@ -219,7 +223,7 @@
     "saveDataSuccessExecution": "all",
     "saveManualExecutions": true,
     "callerPolicy": "workflowsFromSameOwner",
-    "availableInMCP": true,
+    "availableInMCP": false,
     "binaryMode": "separate"
   }
 }

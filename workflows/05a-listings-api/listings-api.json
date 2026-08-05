@@ -26,12 +26,12 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2,
       "position": [
-        256,
+        224,
         0
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, source, title, company, location, description, priority_bonus FROM listings WHERE scored_at IS NULL AND quarantine_reason IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days';",
+        "query": "WITH quarantined AS (\n  UPDATE listings\n  SET quarantine_reason = 'no_body', quarantined_at = NOW()\n  WHERE scored_at IS NULL\n    AND quarantine_reason IS NULL\n    AND date_seen >= CURRENT_DATE - INTERVAL '8 days'\n    AND (description IS NULL OR LENGTH(TRIM(description)) < 200)\n  RETURNING id\n)\nSELECT id, source, title, company, location, description, priority_bonus\nFROM listings\nWHERE scored_at IS NULL\n  AND quarantine_reason IS NULL\n  AND date_seen >= CURRENT_DATE - INTERVAL '8 days'\n  AND id NOT IN (SELECT id FROM quarantined);",
         "options": {}
       },
       "credentials": {
@@ -47,7 +47,7 @@
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2.2,
       "position": [
-        512,
+        448,
         0
       ],
       "parameters": {
@@ -80,7 +80,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        768,
+        672,
         0
       ],
       "parameters": {
@@ -95,7 +95,7 @@
       "typeVersion": 2,
       "position": [
         0,
-        256
+        224
       ],
       "parameters": {
         "httpMethod": "POST",
@@ -111,16 +111,112 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2,
       "position": [
-        256,
-        256
+        224,
+        224
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE listings SET score = $1, rationale = $2, scored_at = NOW() WHERE id = $3 RETURNING id, score;",
+        "query": "WITH target AS (\n  SELECT id, md5(lower(trim(title)) || '|' || lower(trim(company))) AS real_echo\n  FROM listings WHERE id = $3\n),\nupd AS (\n  UPDATE listings SET score = $1, rationale = $2, cap_reason = NULLIF($5, ''), scored_at = NOW()\n  WHERE id = $3\n    AND ($4 IS NULL OR $4 = ''\n         OR md5(lower(trim(title)) || '|' || lower(trim(company))) = $4)\n  RETURNING id, score\n)\nSELECT t.id,\n       (SELECT score FROM upd) AS score,\n       CASE WHEN (SELECT id FROM upd) IS NOT NULL THEN 'ok'\n            WHEN ($4 IS NOT NULL AND $4 <> '' AND t.real_echo <> $4) THEN 'echo_mismatch'\n            ELSE 'no_row' END AS status\nFROM target t;",
         "options": {
-          "queryReplacement": "={{ $json.body.score }},{{ $json.body.rationale }},{{ $json.body.id }}"
+          "queryReplacement": "={{ $json.body.score }},{{ $json.body.rationale }},{{ $json.body.id }},{{ $json.body.title_echo }},{{ $json.body.cap_reason }}"
         }
       },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "id": "wh-get-echo",
+      "name": "Webhook: GET listings/echo",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        448
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "listings/echo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": ""
+    },
+    {
+      "id": "pg-select-echo",
+      "name": "Postgres: Select Echo",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        224,
+        448
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, md5(lower(trim(title)) || '|' || lower(trim(company))) AS real_echo, score, scored_at FROM listings WHERE id = ANY(string_to_array($1, ',')::int[]);",
+        "options": {
+          "queryReplacement": "={{ $json.query.ids }}"
+        }
+      },
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Supabase - job-match-radar"
+        }
+      }
+    },
+    {
+      "id": "respond-echo",
+      "name": "Respond: Send Echo",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        448
+      ],
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      }
+    },
+    {
+      "id": "wh-post-quarantine",
+      "name": "Webhook: POST listings/quarantine",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        672
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "listings/quarantine",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": ""
+    },
+    {
+      "id": "pg-quarantine-no-body",
+      "name": "Postgres: Quarantine No-Body",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        224,
+        672
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE listings SET quarantine_reason = $2, quarantined_at = NOW() WHERE id = ANY(string_to_array($1, ',')::int[]) AND quarantine_reason IS NULL RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ $json.body.ids }},{{ $json.body.reason }}"
+        }
+      },
+      "alwaysOutputData": true,
       "credentials": {
         "postgres": {
           "id": "",
@@ -173,11 +269,45 @@
           }
         ]
       ]
+    },
+    "Webhook: GET listings/echo": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Select Echo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Select Echo": {
+      "main": [
+        [
+          {
+            "node": "Respond: Send Echo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: POST listings/quarantine": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Quarantine No-Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
     "timezone": "Europe/Berlin",
-    "callerPolicy": "workflowsFromSameOwner"
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
   }
 }

@@ -31,7 +31,7 @@
         "resource": "Actors",
         "operation": "Run actor",
         "actorId": "cryptosignals~linkedin-jobs-scraper",
-        "customBody": "={\n  \"action\": \"search\",\n  \"keywords\": \"\\\"community manager\\\" OR \\\"community lead\\\" OR \\\"head of community\\\" OR \\\"social media manager\\\" OR \\\"community operations\\\" OR \\\"AI project manager\\\" OR \\\"AI program manager\\\" OR \\\"head of social\\\" OR \\\"creator community\\\" OR \\\"product community\\\" OR \\\"community strategy\\\" OR \\\"community operations lead\\\" OR \\\"AI operations\\\" OR \\\"AI enablement\\\" OR \\\"AI transformation\\\" OR \\\"AI specialist\\\"\",\n  \"location\": \"Germany\",\n  \"maxItems\": 100\n}",
+        "customBody": "={\n  \"action\": \"search\",\n  \"keywords\": \"\\\"community manager\\\" OR \\\"community lead\\\" OR \\\"head of community\\\" OR \\\"social media manager\\\" OR \\\"community operations\\\" OR \\\"AI project manager\\\" OR \\\"AI program manager\\\" OR \\\"head of social\\\" OR \\\"creator community\\\" OR \\\"community operations lead\\\" OR \\\"AI operations\\\" OR \\\"AI enablement\\\" OR \\\"AI transformation\\\" OR \\\"AI specialist\\\" OR \\\"AI innovation\\\" OR \\\"AI experience lead\\\"\",\n  \"location\": \"Germany\",\n  \"maxItems\": 100\n}",
         "waitForFinish": true
       },
       "credentials": {

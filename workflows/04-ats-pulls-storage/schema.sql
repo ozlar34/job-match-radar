@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS listings (
   location        text,
   salary          text,                                   -- pass-through; varies wildly across sources
   description     text,
-  priority_bonus  boolean NOT NULL DEFAULT false,
   date_seen       date NOT NULL DEFAULT CURRENT_DATE,     -- D-07 Phase 5 query filters on this
   created_at      timestamptz NOT NULL DEFAULT now()      -- audit only; not queried by Phase 5
 );

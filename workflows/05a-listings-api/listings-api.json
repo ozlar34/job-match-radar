@@ -31,7 +31,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH quarantined AS (\n  UPDATE listings\n  SET quarantine_reason = 'no_body', quarantined_at = NOW()\n  WHERE scored_at IS NULL\n    AND quarantine_reason IS NULL\n    AND date_seen >= CURRENT_DATE - INTERVAL '8 days'\n    AND (description IS NULL OR LENGTH(TRIM(description)) < 200)\n  RETURNING id\n)\nSELECT id, source, title, company, location, description, priority_bonus\nFROM listings\nWHERE scored_at IS NULL\n  AND quarantine_reason IS NULL\n  AND date_seen >= CURRENT_DATE - INTERVAL '8 days'\n  AND id NOT IN (SELECT id FROM quarantined);",
+        "query": "WITH quarantined AS (\n  UPDATE listings\n  SET quarantine_reason = 'no_body', quarantined_at = NOW()\n  WHERE scored_at IS NULL\n    AND quarantine_reason IS NULL\n    AND date_seen >= CURRENT_DATE - INTERVAL '8 days'\n    AND (description IS NULL OR LENGTH(TRIM(description)) < 200)\n  RETURNING id\n)\nSELECT id, source, title, company, location, description\nFROM listings\nWHERE scored_at IS NULL\n  AND quarantine_reason IS NULL\n  AND date_seen >= CURRENT_DATE - INTERVAL '8 days'\n  AND id NOT IN (SELECT id FROM quarantined);",
         "options": {}
       },
       "credentials": {

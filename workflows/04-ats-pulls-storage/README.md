@@ -40,7 +40,6 @@ Every per-branch `Code: Normalize <Provider> (<company>)` node emits items with 
 | location | string | Greenhouse `location.name`; Ashby primary `location` joined with secondary locations on `;`. |
 | salary | string \| null | Ashby only (`compensation.compensationTierSummary`); Greenhouse always null. |
 | description | string \| null | Greenhouse: tag-stripped `content` (from `?content=true`); Ashby: `descriptionPlain`. |
-| priority_bonus | boolean | True if title or description matches `/\b(your-priority-keyword)\b/i`. Promoted to top-of-digest in scoring. |
 | date_seen | string | YYYY-MM-DD at normalization time. Stored as `date` (not timestamp) so same-day re-runs collide on the dedup index. |
 
 ## Post-scrape filters (inside each Code node)
@@ -49,9 +48,8 @@ Applied after normalization, before the workflow output. All Code nodes use iden
 
 1. **URL-required drop** — items with null/empty url are dropped (schema requires `url NOT NULL`).
 2. **Marketing/sales exclusion** — drop items whose title matches `marketing manager`, `brand manager`, `performance marketing`, `growth marketing`, `sales manager`, `key account`, `business development`, `PR manager`, `communications manager`.
-3. **Priority override** — if `priority_bonus` is true, keep the listing regardless of the location filters (priority keyword wins).
-4. **Americas-only exclusion** — drop listings whose location matches `americas only`, `us only`, `u.s. only`, `us-only`, `us based`, `us-based`, `canada only`, `latam`, `apac only`, `north america only`.
-5. **Location whitelist** — require the location to match one of: `germany`, `deutschland`, `berlin`, `munich`, `münchen`, `hamburg`, `cologne`, `köln`, `frankfurt`, `düsseldorf`, `stuttgart`, `dublin`, `london`, `amsterdam`, `paris`, `madrid`, `barcelona`, `lisbon`, `stockholm`, `copenhagen`, `helsinki`, `vienna`, `zurich`, `warsaw`, `emea`, `europe`, `eu`, `remote`.
+3. **Americas-only exclusion** — drop listings whose location matches `americas only`, `us only`, `u.s. only`, `us-only`, `us based`, `us-based`, `canada only`, `latam`, `apac only`, `north america only`.
+4. **Location whitelist** — require the location to match one of: `germany`, `deutschland`, `berlin`, `munich`, `münchen`, `hamburg`, `cologne`, `köln`, `frankfurt`, `düsseldorf`, `stuttgart`, `dublin`, `london`, `amsterdam`, `paris`, `madrid`, `barcelona`, `lisbon`, `stockholm`, `copenhagen`, `helsinki`, `vienna`, `zurich`, `warsaw`, `emea`, `europe`, `eu`, `remote`.
 
 Filters are regex-based, case-insensitive. This is one example filter list — adjust to your own market and language requirements.
 

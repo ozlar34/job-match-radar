@@ -7,7 +7,7 @@ n8n workflow that selects already-scored listings (`score >= 6`, not yet digeste
 
 ## Scope
 
-Reads `score >= 6 AND digested_at IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days' ORDER BY priority_bonus DESC, score DESC`, deduplicates by (title, company) preferring non-LinkedIn rows, builds an HTML email, and (if any matches) sends via Gmail and stamps `digested_at = NOW()` on every included listing for cross-run dedup. Empty-candidate runs are suppressed silently.
+Reads `score >= 6 AND digested_at IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days' ORDER BY score DESC`, deduplicates by (title, company) preferring non-LinkedIn rows, builds an HTML email, and (if any matches) sends via Gmail and stamps `digested_at = NOW()` on every included listing for cross-run dedup. Empty-candidate runs are suppressed silently.
 
 ## Architecture
 
@@ -50,8 +50,8 @@ Column + index DDL lives in `schema-additions.sql`. Apply manually via the Supab
 
 ## Digest contract
 
-- **Per-card fields:** score badge (X/10), company, title (linked to `url`), rationale, source tag, optional red PRIORITY badge.
-- **Sort:** `priority_bonus DESC, score DESC`.
+- **Per-card fields:** score badge (X/10), company, title (linked to `url`), rationale, source tag.
+- **Sort:** `score DESC`.
 - **No hard cap** on card count. All `score >= 6` rows surface.
 - **Empty state:** silent exit (false branch unconnected). No "0 matches" email is sent.
 - **Cross-source dedup:** same (lowercased title, lowercased company) pair across sources keeps the non-LinkedIn row.
@@ -72,7 +72,7 @@ curl -X POST http://localhost:5678/webhook/job-digest-run
 SELECT id, source, company, title, score, digested_at
 FROM listings
 WHERE date_seen >= CURRENT_DATE - INTERVAL '8 days'
-ORDER BY priority_bonus DESC, score DESC NULLS LAST;
+ORDER BY score DESC NULLS LAST;
 ```
 
 **Re-send a previously digested listing** (rare; use only if the email failed):

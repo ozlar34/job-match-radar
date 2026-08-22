@@ -42,15 +42,12 @@ The single `Code: Normalize LinkedIn` node emits items with exactly these fields
 | salary | string \| null | Pass through actor-provided salary field |
 | description | string \| null | Pass through actor-provided description |
 | externalId | string \| null | Source-side id; used by Workflow 04 dedup |
-| **priorityBonus** | boolean | True if title or description matches the configured priority keyword. Promoted to top-of-digest in scoring downstream. |
 
 ## Post-scrape filters (inside the Code node)
 
 Applied after normalization, before the workflow output:
 
 1. **Marketing/sales exclusion** — drop items whose title matches: `marketing manager`, `brand manager`, `performance marketing`, `growth marketing`, `sales manager`, `key account`, `business development`, `PR manager`, `communications manager`.
-
-Listings flagged `priorityBonus: true` (title/description matches the configured priority keyword) are kept regardless and pinned to the top of the digest downstream.
 
 Filters are regex-based, case-insensitive.
 
@@ -85,7 +82,7 @@ When a second platform is added later, re-introduce a Merge node (mode: Append, 
 
 Two extra nodes append to this workflow after `Code: Normalize LinkedIn`:
 
-1. `Code: Rename for Supabase` — converts the camelCase normalized output (`priorityBonus`, `externalId`, `dateRetrieved`) into the snake_case `listings` table shape (`priority_bonus`, `external_id`, `date_seen` as `YYYY-MM-DD`).
+1. `Code: Rename for Supabase` — converts the camelCase normalized output (`externalId`, `dateRetrieved`) into the snake_case `listings` table shape (`external_id`, `date_seen` as `YYYY-MM-DD`).
 2. `Postgres: Insert listings` — inserts into the shared Supabase `listings` table using the `Supabase - job-match-radar` credential (Postgres node, `skipOnConflict: true`).
 
 Net flow:

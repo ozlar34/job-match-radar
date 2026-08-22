@@ -25,7 +25,7 @@ Node inventory (5 total):
 | # | Node | Purpose |
 |---|------|---------|
 | 1 | Webhook: GET listings/unscored | `httpMethod: GET`, `responseMode: lastNode` |
-| 2 | Postgres: Select Unscored | `SELECT id, source, title, company, location, description, priority_bonus FROM listings WHERE scored_at IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days'` |
+| 2 | Postgres: Select Unscored | `SELECT id, source, title, company, location, description FROM listings WHERE scored_at IS NULL AND date_seen >= CURRENT_DATE - INTERVAL '8 days'` |
 | 3 | Filter: Drop Phantom Rows | `id > 0` — drops the `{success:true}` phantom n8n's Postgres v2 emits on zero-row SELECTs |
 | 4 | Webhook: POST listings/score | `httpMethod: POST`, `responseMode: lastNode` |
 | 5 | Postgres: UPDATE Score | `executeQuery` with `$1/$2/$3` from `body.score / body.rationale / body.id`, `RETURNING id, score` |
